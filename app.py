@@ -125,99 +125,82 @@ def _add_actions_table(doc: Document, rows: List[Dict[str, str]]):
 # Geração da ata
 # ==========================
 
-def gerar_ata_docx(
-    dados: Dict,
-    logo_bytes: bytes | None = None,
-) -> bytes:
-    doc = Document()
-    _set_default_styles(doc)
+from docx.oxml import OxmlElement
+from docx.oxml.ns import qn as _qn
+from docx.enum.text import WD_ALIGN_PARAGRAPH
+from docx.shared import Inches
 
-    _add_header_block(doc, dados.get("entidade", ""), logo_bytes)
-    _add_title(doc, dados.get("titulo", "Ata de Reunião"))
 
-    # Seção: Identificação
-    _add_section_heading(doc, "1. Identificação da Reunião")
-    par = doc.add_paragraph()
-    linha1 = f"Data: {_human_date(dados['data'], dados.get('hora_inicio'))} | Local: {dados.get('local','')}"
-    par.add_run(linha1)
-    par2 = doc.add_paragraph()
-    linha2 = f"Presidida por: {dados.get('presidida_por','')} | Secretariada por: {dados.get('secretariada_por','')}"
-    par2.add_run(linha2)
+def enable_line_numbering(doc: Document, count_by: int = 1, start: int = 1, restart: str = "continuous"):
+    """
+    Habilita numeração de linhas no documento (seção 0).
+    restart: 'newPage' | 'newSection' | 'continuous'
+    """
+    sectPr = doc.sections[0]._sectPr
+    ln = OxmlElement('w:lnNumType')
+    ln.set(_qn('w:countBy'), str(count_by))
+    ln.set(_qn('w:start'), str(start))
+    ln.set(_qn('w:restart'), restart)
+    sectPr.append(ln)
 
-    # Seção: Participantes
-    _add_section_heading(doc, "2. Participantes")
-    participantes = [p.strip() for p in dados.get("participantes", []) if p.strip()]
-    if participantes:
-        _add_bullets(doc, participantes)
-    else:
-        doc.add_paragraph("—")
 
-    # Seção: Pauta
-    _add_section_heading(doc, "3. Pauta")
-    pauta = [i.strip() for i in dados.get("pauta", []) if i.strip()]
-    if pauta:
-        _add_bullets(doc, pauta, numbered=True)
-    else:
-        doc.add_paragraph("—")
+def add_justified_paragraph(doc: Document, text: str, first_line_indent_cm: float = 0.0):
+    p = doc.add_paragraph(text)
+    p.alignment = WD_ALIGN_PARAGRAPH.JUSTIFY
+    if first_line_indent_cm > 0:
+        p.paragraph_format.first_line_indent = Inches(first_line_indent_cm / 2.54)
+    return p
 
-    # Seção: Deliberações e Registros
-    _add_section_heading(doc, "4. Deliberações e Registros")
-    delib = dados.get("deliberacoes", "").strip()
-    if delib:
-        doc.add_paragraph(delib)
-    else:
-        doc.add_paragraph("—")
 
-    # Seção: Encaminhamentos (tabela)
-    _add_section_heading(doc, "5. Encaminhamentos")
-    _add_actions_table(doc, dados.get("encaminhamentos", []))
+def montar_narrativa(dados: Dict) -> list[str]:
+    # Pauta como frase
+    pauta = [i for i in dados.get('pauta', []) if i]
+    pauta_frase = "; ".join(pauta) if pauta else "—"
+    # Participantes
+    participantes = [p for p in dados.get('participantes', []) if p]
+    part_frase = ", ".join(participantes) if participantes else "—"
+    # Encaminhamentos resumidos
+    enc = []
+    for r in dados.get('encaminhamentos', []):
+        t = r.get('tarefa', '').strip(); resp = r.get('responsavel','').strip(); prazo = r.get('prazo','').strip()
+        if any([t, resp, prazo]):
+            bloco = " — ".join([x for x in [t, resp, prazo] if x])
+            enc.append(bloco)
+    enc_frase = "; ".join(enc) if enc else "—"
 
-    # Seção: Encerramento
-    _add_section_heading(doc, "6. Encerramento")
-    encerr = dados.get("encerramento", "")
-    if encerr:
-        doc.add_paragraph(encerr)
+    p1 = (
+        f"Ao {_human_date(dados['data'], dados.get('hora_inicio'))}, realizou-se a {dados.get('titulo','Reunião')} "
+        f"no {dados.get('local','')}, tendo como pauta: {pauta_frase}."
+    )
 
-    # Seção: Assinaturas
-    _add_section_heading(doc, "7. Assinaturas")
-    ass = [a.strip() for a in dados.get("assinaturas", []) if a.strip()]
-    if ass:
-        for a in ass:
-            p = doc.add_paragraph("\n\n")
-            p = doc.add_paragraph(a)
-            p.alignment = WD_ALIGN_PARAGRAPH.CENTER
-    else:
-        doc.add_paragraph("\n\n_______________________________")
-        doc.add_paragraph("Assinatura")
+    p2 = (
+        f"Estiveram presentes: {part_frase}. Presidiu: {dados.get('presidida_por','')}; "
+        f"Secretariou: {dados.get('secretariada_por','')}."
+    )
 
-    # Exportar para bytes
-    bio = io.BytesIO()
-    doc.save(bio)
-    return bio.getvalue()
+    p3 = f"Deliberações e registros: {dados.get('deliberacoes','').strip() or '—' }"
+    p4 = f"Encaminhamentos: {enc_frase}."
+    p5 = dados.get('encerramento','').strip()
+
+    return [p for p in [p1, p2, p3, p4, p5] if p]
+
 
 
 # ==========================
 # UI – Streamlit
+# ==========================
 # ==========================
 
 st.set_page_config(page_title="Gerador de Ata", layout="wide")
 
 st.title("📝 Gerador de Ata de Reunião")
 
-st.markdown(
-    """
-<div style="background: linear-gradient(135deg, #f5f7fa 0%, #e4e8eb 100%); border-radius: 12px; padding: 14px; border-left: 4px solid #2e7d32; box-shadow: 0 2px 8px rgba(0,0,0,0.05); margin-bottom: 10px;">
-  <p style="font-family: 'Segoe UI', Roboto, sans-serif; color: #2c3e50; font-size: 15px; line-height: 1.6; margin: 0;">
-    <b>📌 Nesta página você encontra:</b><br>
-    • Formulário simples para dados da reunião<br>
-    • Seções para pauta, deliberações e encaminhamentos<br>
-    • Upload de logo e nome da entidade no cabeçalho<br>
-    • Geração imediata de arquivo .docx padronizado
-  </p>
-</div>
-""",
-    unsafe_allow_html=True,
-)
+# Opções de formatação
+col_fmt1, col_fmt2 = st.columns([1,1])
+with col_fmt1:
+    modo_narrativo = st.toggle("Formato narrativo (sem títulos de seção)", value=True, help="Gera parágrafos corridos.")
+with col_fmt2:
+    numerar_linhas = st.toggle("Numeração de linhas (Word)", value=True, help="Ativa numeração de linhas contínua no documento.")
 
 with st.form("form_ata"):
     st.subheader("1) Cabeçalho")
@@ -327,8 +310,67 @@ if gerar:
     }
 
     logo_bytes = logo_file.read() if logo_file else None
-    output = gerar_ata_docx(dados, logo_bytes)
-    st.session_state['last_doc'] = output
+
+    # Monta o documento
+    doc = Document()
+    _set_default_styles(doc)
+    if numerar_linhas:
+        enable_line_numbering(doc, count_by=1, start=1, restart='continuous')
+
+    # Cabeçalho + Título em CAIXA ALTA e centralizado (duas linhas se houver \" - \")
+    _add_header_block(doc, dados.get("entidade", ""), logo_bytes)
+    titulo_up = (dados.get("titulo") or "Ata de Reunião").upper()
+    _add_title(doc, titulo_up)
+
+    if modo_narrativo:
+        # Corpo narrativo justificado com primeira linha recuada levemente
+        for par in montar_narrativa(dados):
+            add_justified_paragraph(doc, par, first_line_indent_cm=0.8)
+        # Assinaturas
+        _add_section_heading(doc, "ASSINATURAS")
+        for a in dados.get("assinaturas", []):
+            p = doc.add_paragraph("
+
+")
+            p = doc.add_paragraph(a)
+            p.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    else:
+        # Estrutura original com seções e listas (pauta numerada)
+        _add_section_heading(doc, "1. IDENTIFICAÇÃO DA REUNIÃO")
+        par = doc.add_paragraph()
+        linha1 = f"Data: {_human_date(dados['data'], dados.get('hora_inicio'))} | Local: {dados.get('local','')}"
+        par.add_run(linha1)
+        par2 = doc.add_paragraph()
+        linha2 = f"Presidida por: {dados.get('presidida_por','')} | Secretariada por: {dados.get('secretariada_por','')}"
+        par2.add_run(linha2)
+
+        _add_section_heading(doc, "2. PARTICIPANTES")
+        _add_bullets(doc, participantes)
+
+        _add_section_heading(doc, "3. PAUTA")
+        _add_bullets(doc, pauta, numbered=True)
+
+        _add_section_heading(doc, "4. DELIBERAÇÕES E REGISTROS")
+        doc.add_paragraph(dados.get("deliberacoes", "") or "—")
+
+        _add_section_heading(doc, "5. ENCAMINHAMENTOS")
+        _add_actions_table(doc, dados.get("encaminhamentos", []))
+
+        _add_section_heading(doc, "6. ENCERRAMENTO")
+        if dados.get("encerramento"):
+            doc.add_paragraph(dados["encerramento"])
+
+        _add_section_heading(doc, "7. ASSINATURAS")
+        for a in dados.get("assinaturas", []):
+            p = doc.add_paragraph("
+
+")
+            p = doc.add_paragraph(a)
+            p.alignment = WD_ALIGN_PARAGRAPH.CENTER
+
+    bio = io.BytesIO()
+    doc.save(bio)
+    st.session_state['last_doc'] = bio.getvalue()
 
 # Área de download separada
 st.markdown("---")
@@ -347,4 +389,3 @@ with colB:
         )
     else:
         st.info("Preencha o formulário acima e clique em 'Gerar .DOCX da Ata'.")
-
