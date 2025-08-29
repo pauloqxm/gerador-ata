@@ -6,6 +6,7 @@ import streamlit as st
 from docx import Document
 from docx.shared import Pt, Inches
 from docx.enum.text import WD_ALIGN_PARAGRAPH
+from docx.enum.section import WD_SECTION
 from docx.oxml.ns import qn
 from docx.oxml import OxmlElement
 
@@ -37,21 +38,26 @@ def _set_default_styles(doc: Document):
 
 
 def _add_header_block(doc: Document, org_name: str, logo_bytes: bytes | None):
+    section = doc.sections[0]
+    header = section.header
+    header_para = header.paragraphs[0]
+
+    # Logo no cabeçalho
     if logo_bytes:
-        section = doc.sections[0]
-        header = section.header
-        header_para = header.paragraphs[0]
         run = header_para.add_run()
         try:
             run.add_picture(io.BytesIO(logo_bytes), width=Inches(1.2))
         except Exception:
             pass
         header_para.alignment = WD_ALIGN_PARAGRAPH.LEFT
+
+    # Nome da entidade também no cabeçalho (para não contar na numeração de linhas)
     if org_name.strip():
-        p = doc.add_paragraph()
-        run = p.add_run(org_name.strip())
-        run.bold = True
-        p.alignment = WD_ALIGN_PARAGRAPH.CENTER
+        p_head = header.add_paragraph()
+        r = p_head.add_run(org_name.strip())
+        r.bold = True
+        p_head.alignment = WD_ALIGN_PARAGRAPH.CENTER
+
 
 
 def _human_date(date_obj: dt.date, hour_str: str | None = None):
@@ -99,13 +105,23 @@ def _add_actions_table(doc: Document, rows: List[Dict[str, str]]):
         row_cells[2].text = r.get("prazo", "").strip()
 
 
-def enable_line_numbering(doc: Document, count_by: int = 1, start: int = 1, restart: str = "continuous"):
-    sectPr = doc.sections[0]._sectPr
+def enable_line_numbering(doc: Document, count_by: int = 1, start: int = 1, restart: str = "continuous", section=None):
+    """Ativa numeração de linhas apenas na seção indicada (body). Cabeçalho/rodapé ficam fora por padrão.
+    Se *section* não for passado, usa a primeira seção.
+    """
+    if section is None:
+        section = doc.sections[0]
+    sectPr = section._sectPr
     ln = OxmlElement('w:lnNumType')
     ln.set(qn('w:countBy'), str(count_by))
     ln.set(qn('w:start'), str(start))
     ln.set(qn('w:restart'), restart)
     sectPr.append(ln)
+    # Força a numeração começar apenas no corpo (após o título/cabeçalho)
+    for p in doc.paragraphs:
+        if p.style.name == 'Title':
+            continue
+        p.paragraph_format.line_number_restart = False
 
 
 def add_justified_paragraph(doc: Document, text: str, first_line_indent_cm: float = 0.0):
@@ -237,12 +253,15 @@ if gerar:
 
     doc = Document()
     _set_default_styles(doc)
-    if numerar_linhas:
-        enable_line_numbering(doc)
 
     _add_header_block(doc, dados.get("entidade",""), logo_bytes)
     titulo_up = (dados.get("titulo") or "Ata de Reunião").upper()
     _add_title(doc, titulo_up)
+
+    # Quebra de seção contínua após o título para iniciar numeração a partir da primeira linha da ata
+    new_sec = doc.add_section(WD_SECTION.CONTINUOUS)
+    if numerar_linhas:
+        enable_line_numbering(doc, count_by=1, start=1, restart='continuous', section=new_sec)
 
     if modo_narrativo:
         for par in montar_narrativa(dados):
