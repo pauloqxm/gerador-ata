@@ -84,16 +84,19 @@ def _add_section_heading(doc: Document, text: str):
     h.alignment = WD_ALIGN_PARAGRAPH.LEFT
 
 
-def _add_bullets(doc: Document, items: List[str]):
+def _add_bullets(doc: Document, items: List[str], numbered: bool = False):
+    """
+    Cria lista com marcadores (padrão) ou numerada (numbered=True)
+    usando estilos nativos do Word: 'List Bullet' e 'List Number'.
+    Evita uso de APIs privadas do python-docx.
+    """
+    list_style = "List Number" if numbered else "List Bullet"
     for item in items:
-        if item.strip():
-            p = doc.add_paragraph(item.strip())
-            p.style = doc.styles["Normal"]
-            p.paragraph_format.left_indent = Inches(0.0)
-            p_format = p.paragraph_format
-            p_format.first_line_indent = Inches(0.0)
-            p.style = doc.styles["Normal"]
-            p._element.get_or_add_pPr().insert(0, p._element._new_pStyle('ListParagraph'))
+        item = (item or "").strip()
+        if not item:
+            continue
+        doc.add_paragraph(item, style=list_style)
+
 
 
 def _add_actions_table(doc: Document, rows: List[Dict[str, str]]):
@@ -153,7 +156,7 @@ def gerar_ata_docx(
     _add_section_heading(doc, "3. Pauta")
     pauta = [i.strip() for i in dados.get("pauta", []) if i.strip()]
     if pauta:
-        _add_bullets(doc, pauta)
+        _add_bullets(doc, pauta, numbered=True)
     else:
         doc.add_paragraph("—")
 
@@ -344,3 +347,4 @@ with colB:
         )
     else:
         st.info("Preencha o formulário acima e clique em 'Gerar .DOCX da Ata'.")
+
